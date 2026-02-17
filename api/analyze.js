@@ -362,9 +362,19 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => {
+  res.json({ message: "ATS Backend running 🚀" });
+});
+
+app.post("/", async (req, res) => {
+  const { text } = req.body;
+
+  if (!text) {
+    return res.status(400).json({ error: "Resume text required" });
+  }
+
   res.json({
-    status: "OK",
-    message: "ATS Backend is running on Vercel 🚀",
+    score: 78,
+    feedback: "Good resume structure, improve keywords",
   });
 });
 
