@@ -353,29 +353,96 @@
 // );
 
 
-const express = require("express");
-const cors = require("cors");
+import cors from "cors";
+import multer from "multer";
+import pdf from "pdf-parse";
+import mammoth from "mammoth";
 
-const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(cors());
-app.use(express.json());
+const corsMiddleware = cors({ origin: "*" });
 
-app.get("/", (req, res) => {
-  res.json({ message: "ATS Backend running 🚀" });
-});
+function runMiddleware(req, res, fn) {
+  return new Promise((resolve, reject) => {
+    fn(req, res, (result) => {
+      if (result instanceof Error) reject(result);
+      resolve(result);
+    });
+  });
+}
 
-app.post("/", async (req, res) => {
-  const { text } = req.body;
+/* ================= ATS LOGIC (UNCHANGED) ================= */
 
-  if (!text) {
-    return res.status(400).json({ error: "Resume text required" });
+function scoreResume(text) {
+  const lower = text.toLowerCase();
+  let score = 0;
+  const matched = [];
+  const missing = [];
+  const flags = {};
+
+  const keywordWeights = {
+    javascript: 6,
+    node: 6,
+    express: 5,
+    react: 6,
+    mongodb: 5,
+    sql: 5,
+    "rest api": 5,
+    aws: 5,
+    docker: 4,
+    git: 3
+  };
+
+  let keywordScore = 0;
+  for (const key in keywordWeights) {
+    if (lower.includes(key)) {
+      keywordScore += keywordWeights[key];
+      matched.push(key);
+    } else {
+      missing.push(key);
+    }
   }
 
-  res.json({
-    score: 78,
-    feedback: "Good resume structure, improve keywords",
-  });
-});
+  flags.lowKeywords = keywordScore < 15;
+  score += Math.min(keywordScore, 35);
+  score = Math.min(score, 100);
 
-module.exports = app;
+  return { score, matched, missing, flags };
+}
+
+/* ================= SERVERLESS HANDLER ================= */
+
+export default async function handler(req, res) {
+  await runMiddleware(req, res, corsMiddleware);
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  await runMiddleware(req, res, upload.single("resume"));
+
+  try {
+    let text = "";
+
+    if (req.file.mimetype === "application/pdf") {
+      const data = await pdf(req.file.buffer);
+      text = data.text;
+    } else {
+      const result = await mammoth.extractRawText({
+        buffer: req.file.buffer
+      });
+      text = result.value;
+    }
+
+    const analysis = scoreResume(text);
+
+    res.json({
+      score: analysis.score,
+      matchedKeywords: analysis.matched,
+      missingKeywords: analysis.missing
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Resume analysis failed" });
+  }
+}
